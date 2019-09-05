@@ -1,0 +1,160 @@
+---
+title: "genDA example"
+author: "Sarah Romanes"
+date: "5 September 2019"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+## Urban Cover example
+
+The Urban Land Cover dataset looks at classifying land cover in a high resolution image of an urban area. For this dataset, a 30cm resolution colour infra-red digital orthoimagery of the city of Deerfield Beach, FL, USA was obtained, containing 8-bit data for the near infra-red bands. Image segmentation was performed on a selected area of the photograph to produce $n = 168$ image segments with a total of $m = 147$ features defining the image segments such as spectal, texture, size, and shape information of thr segments. $K = 9$ classes. More information about the data processing procedure can be found in (Johnson, 2013).
+	
+First, read in the data and packages
+
+```{r load packages}
+library(genDA)
+library(tidyverse)
+library(corrplot)
+```
+
+```{r reading in the data}
+data <- data.frame(read_csv("data/urban-land.csv"))
+class <- as.factor(data[,1]) # extract class variable - which is land type
+data <- data[,-1] # remove this from the rest of the dataset
+head(as.tibble(data))
+table(class)
+```
+
+From a quick glance at the data, we have many potential different response types here! For the `genDA` algorithm, we have to manually specify column response type. We can crudely do this as shown below. For count data, we check the negative binomial assignment by looking at the mean variance relationship. I think it looks ok (Var >> Mean).
+
+```{r response type}
+
+family <- c()
+for(j in 1:ncol(data)){
+  if(class(data[,j])=="integer"){
+    family[j]="negative-binomial"
+  } else if (min(data[,j])> 0){
+    family[j]="log-normal"
+  } else {
+    family[j]="gaussian"
+  }
+}
+
+ints <- which(family=="negative-binomial")
+apply(data[,ints],2, mean)
+apply(data[,ints],2,var)
+```
+
+We can have a glance at the correlation structure. Subsetting on class reveals different correlation structures.
+
+```{r correlation}
+corrplot(cor(data), method ="color",  tl.pos='n') #correlation for all classes
+
+corrplot(cor(data[which(class=="car"), ]), method ="color",  tl.pos='n') #correlation for car class
+corrplot(cor(data[which(class=="shadow"), ]), method ="color",  tl.pos='n') #correlation for shadow class
+corrplot(cor(data[which(class=="pool"), ]), method ="color",  tl.pos='n') #correlation for pool class
+```
+
+The differing correlation structures suggests that the option of `common.covariance = FALSE` might be best for our data. This fits a GLLVM for each class, returning a list of lists corresponding to each class.
+
+```{r genDA}
+fit.genDA <- genDA(y = data, class = class, common.covariance = FALSE, family = family)
+fit.genDA
+```
+
+For example, we can extract model coefficients for class `car` as follows
+```{r car coefs}
+fit.genDA$car$params
+```
+
+We can find the resubstitution error rate using the `predict` method as follows. Returned is a list containing a matrix of probabilities for each class as well as a vector of predicted class.
+```{r predict}
+pred <- predict(fit.genDA, newdata = data)
+head(pred$prob_class)
+class.pred <- pred$class
+mean(class!=class.pred)
+```
+
+Note that the `common.covariance = TRUE` (the default) - doesn't work well in this setting. If we look at the predicted class - it is all `asphalt`! I'm not sure why that is. Preliminary simulation results show that the `common.covariance = TRUE` works well for simulated GLLVMS with common covariance so probably not bug in the code so not sure what is driving this.
+
+```{r common cov}
+fit.genDA.com <- genDA(y = data, class = class, common.covariance = TRUE, family = family)
+pred <- predict(fit.genDA.com, newdata = data)
+pred$class
+```
+
+
+# Functions in the works!!
+
+## Plot function
+
+If we fit a GLLVM with *no* class information, we can see how well the data clusters on the latent variable space as follows
+
+```{r ordination plot}
+res.null <- genDA(y = data, family = family)
+ 
+lvdata = data.frame(LV1 = res.null$lvs[,1], LV2 = res.null$lvs[,2], class = class)
+ 
+p.LV <-  ggplot(lvdata, aes(x= LV1, y = LV2, color = class)) + 
+   geom_point(size=3)  + 
+   theme_minimal()+
+   theme(axis.title = element_text(size = 18), 
+         axis.text = element_text(size = 18), 
+         axis.text.x = element_text(size = 18), 
+         legend.text = element_text(size = 18), 
+         legend.title = element_text(size = 18), 
+         strip.text = element_text(size = 18),
+         plot.title = element_text(size = 20),
+         legend.position = "bottom") + 
+   scale_color_brewer(palette = "Set1")
+p.LV
+```
+
+Compare this to the LV plot after the model has been fit with class information - it should no longer cluster on the LV space.
+
+First scenario - `common.covariance= TRUE`
+
+```{r plot common covariance}
+lvdata = data.frame(LV1 = fit.genDA.com$lvs[,1], LV2 = fit.genDA.com$lvs[,2], class = class)
+p.com <-  ggplot(lvdata, aes(x= LV1, y = LV2, color = class)) + 
+   geom_point(size=3)  + 
+   theme_minimal()+
+   theme(axis.title = element_text(size = 18), 
+         axis.text = element_text(size = 18), 
+         axis.text.x = element_text(size = 18), 
+         legend.text = element_text(size = 18), 
+         legend.title = element_text(size = 18), 
+         strip.text = element_text(size = 18),
+         plot.title = element_text(size = 20),
+         legend.position = "bottom") + 
+   scale_color_brewer(palette = "Set1")
+p.com
+```
+
+Second scenario - `common.covariance = FALSE`. A bit more work is required to extract seperate LV estimates from different model fits.
+
+```{r plot separate covariance}
+
+lvs <- lapply(fit.genDA, function(x) x$lvs)
+names <- as.factor(rep(names(lvs), times = sapply(lvs, function(x) nrow(x))))
+lvs <- do.call(rbind, lvs)
+lvdata = data.frame(LV1 = lvs[,1], LV2 = lvs[,2], class = names)
+ 
+ 
+p.sep <-  ggplot(lvdata, aes(x= LV1, y = LV2, color = class)) + 
+   geom_point(size=3)  + 
+   theme_minimal()+
+   theme(axis.title = element_text(size = 18), 
+         axis.text = element_text(size = 18), 
+         axis.text.x = element_text(size = 18), 
+         legend.text = element_text(size = 18), 
+         legend.title = element_text(size = 18), 
+         strip.text = element_text(size = 18),
+         plot.title = element_text(size = 20),
+         legend.position = "bottom") + 
+   scale_color_brewer(palette = "Set1")
+p.sep
+```
+

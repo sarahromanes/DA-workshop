@@ -1,0 +1,70 @@
+---
+title: "multiDA example"
+author: "Sarah Romanes"
+date: "5 September 2019"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# TCGA Example
+
+Microarray data from TCGA was used to classify 5 different molecular subtypes of breast cancer, namely "Basal", "HER2", "Luminal A", "Luminal B", and "Normal", with the data consisting of 266 samples and a feature set of size 15803. As the breast cancer subtypes were defined intrinsically based on PAM50 gene expression levels, these genes were removed first in order to see if other complementary genes could be used in order to predict cancer subtype. 
+
+First, read in the data and packages
+
+```{r}
+library(multiDA)
+library(ggplot2)
+```
+
+
+```{r reading in the data}
+load("data/TCGA.RData")
+
+X <- TCGA$mX  # This is our matrix of expression data
+y <- TCGA$vy  # This is our vector of class labels.
+
+dim(X)
+```
+
+Note that the number of genes >> number of observations. As such, we cannot use classical DA algorithms. 
+
+We can use the `multiDA` function from the `multiDA` package to see if we can classify subtypes of breast cancer. We will assume that the normal distributions fit to each feature have the same within feature variance.
+
+```{r using the multiDA package}
+library(multiDA)
+
+fit.multiDA <- multiDA(y=y, X=X, equal.var = TRUE)
+fit.multiDA
+```
+
+We can see from looking at `fit.multiDA` that we return an output of the top 10 features that separate the data, and how the data is parititioned. We can see that partition 48 corresponds to classes 1,4,and 5, against classes 2 and 3 grouped together.
+
+If we wanted to look at a smaller subset of possible parititions, one option is the `onevsrest` option. This only considers partitions where one class is different compared to the others. In this case we get:
+
+```{r restricted sets}
+fit.multiDA.restrict <- multiDA(y=y, X=X, equal.var = TRUE, set.options = "onevsrest")
+fit.multiDA.restrict
+```
+
+We can now plot our results to see how these partitions look. 
+
+```{r plot}
+plot(fit.multiDA, ranks = 1)
+plot(fit.multiDA.restrict, ranks = 1)
+```
+
+We can find the resubstitution error rate by using the `predict` method. This returns a list of two object - both a vector of predicted values as well as a matrix of class membership probabilities. 
+```{r predict}
+pred <- predict(fit.multiDA, newdata = X)
+head(pred$probabilities)
+class <- pred$y.pred
+
+mean(class!=y)
+```
+
